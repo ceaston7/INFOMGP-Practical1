@@ -135,6 +135,8 @@ public:
          //Complete
          //integrate velocity
          //COM = (comVelocity * timeStep) + COM;
+        if(!isFixed)
+            cout << "COM before adjust: " << COM << endl;
          COM = (comVelocity * timeStep) + COM;
          //integrate orientation
          RowVector4d w;
@@ -147,6 +149,9 @@ public:
            currV.row(i) = QRot(origV.row(i), orientation) + COM;
          }
          invIT = getCurrInvInertiaTensor();
+
+         if(!isFixed)
+            cout << "COM after adjust: " << COM << endl;
     }
 
     //Updating velocity *instantaneously*. i.e., not integration from acceleration, but as a result of a collision impulse from the "impulses" list
@@ -161,24 +166,30 @@ public:
               }
 
               //update linear and angular velocity according to all impulses
+              cout << "comVel before impulses: " << comVelocity << endl;
+              cout << "angVel before impulses: " << angVelocity << endl;
               for (int i=0;i<impulses.size();i++){
-              RowVector3d pos = std::get<0>(impulses[i]);
-              RowVector3d dir = std::get<1>(impulses[i]);
-              double dirMag = dir.norm();
-              RowVector3d angImp = invIT*pos.cross(dir + frictionTan*dirMag).transpose();
-              RowVector3d linImp = (dir + frictionTan*dirMag)/(mass/1000);
+                  RowVector3d pos = std::get<0>(impulses[i]);
+                  RowVector3d dir = std::get<1>(impulses[i]);
+                  double dirMag = dir.norm();
+                  RowVector3d angImp = invIT*(pos.cross(dir /*+ frictionTan*dirMag*/).transpose());
+                  RowVector3d linImp = (dir /*+ frictionTan*dirMag*/)/(mass/1000);
+                  cout << "linImp " << i << ": " << linImp << endl;
+                  cout << "angImp " << i << ": " << angImp << endl;
 
                   /***************
                    TODO
                    ***************/
-              for(int j=0; j<3; j++){
-              comVelocity[j] += linImp[j];
+                  for(int j=0; j<3; j++){
+                    comVelocity[j] += linImp[j];
 
-            //  angVelocity[j] += angImp[j];
-              }
+                    angVelocity[j] += angImp[j];
+                  }
 
               }
               impulses.clear();
+              cout << "comVel after impulses: " << comVelocity << endl;
+              cout << "angVel after impulses: " << angVelocity << endl;
     }
 
 
@@ -192,9 +203,53 @@ public:
         /***************
          TODO
          ***************/
+         MatrixXd r;
+         MatrixXd torque;
+         MatrixXd angAccel;
+         MatrixXd allAngVels;
+         RowVector3d totalAngAccel;
+         RowVector3d totalVelocity;
+         RowVector3d rtemp;
+         RowVector3d atemp;
+         MatrixXd btemp;
+         RowVector3d PVelocity;
 
-         comVelocity = comVelocity + (gravity*timeStep);
-         comVelocity = comVelocity - (airDrag*comVelocity);
+         //comVelocity = comVelocity + (gravity*timeStep);
+
+      /*   for(int i=0; i<currV.rows(); i++){
+           r.row(i) = currV.row(i) - origV.row(i);
+         }
+         for(int i=0; i<r.rows(); i++){
+           rtemp = r.row(i);
+           torque.row(i) = rtemp.cross(gravity);
+         }
+         for(int i=0; i<torque.rows(); i++){
+           angAccel.row(i) = torque.row(i)*invIT;
+           allAngVels.row(i) = (angAccel.row(i)*timeStep) + angVelocity;
+           angVelocity += angAccel.row(i)*timeStep;
+           atemp = allAngVels.row(i);
+           comVelocity += atemp.cross(rtemp);
+         }
+         for(int i=0; i<angAccel.rows(); i++){
+           totalAngAccel += angAccel.row(i);
+         }
+         angVelocity += (totalAngAccel*timeStep);
+      //   comVelocity = (comVelocity + PVelocity)*timeStep;
+         comVelocity -= airDrag*comVelocity;*/
+
+         for(int i=0; i<currV.rows(); i++){
+           r.row(i) = currV.row(i)-origV.row(i);
+         }
+         for(int i=0; i<r.rows(); i++)
+         {
+           rtemp = r.row(i);
+           btemp.row(i) = angVelocity.cross(rtemp);
+         }
+         for(int i=0; i<btemp.rows(); i++){
+           PVelocity += btemp.row(i);
+         }
+         comVelocity = (gravity*timeStep) + comVelocity + PVelocity;
+         comVelocity -= airDrag*comVelocity;
     }
 
 
@@ -266,49 +321,71 @@ public:
     void handleCollision(RigidObject& ro1, RigidObject& ro2, const double depth, const RowVector3d& contactNormal, const RowVector3d& penPosition, const double CRCoeff, double friction){
       //Interpretation resolution: move each object by inverse mass weighting, unless either is fixed, and then move the other. Remember to respect the direction of contactNormal and update penPosition accordingly.
       RowVector3d contactPosition;
+
       /***************
        TODO
        ***************/
        RowVector3d depthVector = depth*contactNormal;
-   contactPosition = penPosition + depthVector;
-   if(ro1.isFixed){
-       ro2.COM -= depthVector;
-   }
-   else if(ro2.isFixed){
-       ro1.COM += depthVector;
-   }
-   else{
-           ro1.COM -= contactNormal*depth*0.5;
+       contactPosition = penPosition - ro2.COM + depthVector;
+       if(ro1.isFixed){
+           ro2.COM += depthVector;
+       }
+       else if(ro2.isFixed){
+           ro1.COM -= depthVector;
+       }
+       else{
+            double massSum = (ro1.mass + ro2.mass)/1000;
+            ro1.COM -= depthVector*(1-(ro1.mass/1000)/massSum);
+            ro2.COM += depthVector*(1-(ro2.mass/1000)/massSum);
+            contactPosition = penPosition - ro2.COM;
+       }
+       //Create impulses and push them into ro1.impulses and ro2.impulses.
+       /***************
+        TODO
+        ***************/
+       RowVector3d ro1R = contactPosition - ro1.COM;
+       RowVector3d ro2R = contactPosition - ro2.COM;
+       //RowVector3d ro1RCrossNorm = ro1R.cross(contactNormal);
+       //RowVector3d ro2RCrossNorm = ro2R.cross(contactNormal);
+       RowVector3d ro1angToLinVel = ro1.angVelocity.cross(ro1R);
+       RowVector3d ro2angToLinVel = ro2.angVelocity.cross(ro2R);
+        if(!ro1.isFixed)
+            cout << "ro1angToLinVel: " << ro1angToLinVel << endl;
+        if(!ro2.isFixed)
+            cout <<"ro2angToLinVel: " << ro2angToLinVel << endl;
 
-           ro2.COM += contactNormal*depth*0.5;
-   }
-   //Create impulses and push them into ro1.impulses and ro2.impulses.
-   /***************
-    TODO
-    ***************/
-   RowVector3d ro1R = contactPosition - ro1.COM;
-   RowVector3d ro2R = contactPosition - ro2.COM;
-   //RowVector3d ro1RCrossNorm = ro1R.cross(contactNormal);
-   //RowVector3d ro2RCrossNorm = ro2R.cross(contactNormal);
-   double impulseMag = -(1+CRCoeff)*
-                       ((ro1.comVelocity - ro2.comVelocity).dot(contactNormal)
-                       /((1/(ro1.mass/1000) + 1/(ro2.mass/1000))));
-                    //   +(ro1R.cross(contactNormal)*ro1.invIT*ro1R.cross(contactNormal).transpose())+(ro2R.cross(contactNormal)*ro2.invIT*ro2R.cross(contactNormal).transpose())));
+       double impulseMag = -(1+CRCoeff)*
+                           (((ro1.comVelocity + ro1.angVelocity.cross(ro1R))- (ro2.comVelocity + ro2.angVelocity.cross(ro2R))).dot(contactNormal)
+                           /((1/(ro1.mass/1000) + 1/(ro2.mass/1000))
+                           +(ro1R.cross(contactNormal)*ro1.invIT*ro1R.cross(contactNormal).transpose())+(ro2R.cross(contactNormal)*ro2.invIT*ro2R.cross(contactNormal).transpose())));
+        cout << "impulseMag: " << impulseMag << endl;
 
-   RowVector3d frictionTan = (contactNormal.cross(ro1.comVelocity - ro2.comVelocity)).cross(contactNormal)*friction;
-   ro1.frictionTan = frictionTan;
-   ro2.frictionTan = frictionTan;
+       RowVector3d frictionTan = (contactNormal.cross(ro1.comVelocity - ro2.comVelocity)).cross(contactNormal)*friction;
+       cout << "friction: " << frictionTan << endl;
+       for(int i = 0; i < 3; i++){
+        if(frictionTan[i] < 0.0005)
+            frictionTan[i] = 0;
+       }
+       cout << "corrected friction: " << frictionTan << endl;
+       ro1.frictionTan = frictionTan;
+       ro2.frictionTan = frictionTan;
 
-   Impulse* ro1Impulse = new Impulse(ro1R, -impulseMag*contactNormal);
-   Impulse* ro2Impulse = new Impulse(ro2R, impulseMag*contactNormal);
-   ro1.impulses.push_back(*ro1Impulse);
-   ro2.impulses.push_back(*ro2Impulse);
-   delete ro1Impulse;
-   delete ro2Impulse;
+       Impulse* ro1Impulse = new Impulse(ro1R, impulseMag*contactNormal);
+       Impulse* ro2Impulse = new Impulse(ro2R, -impulseMag*contactNormal);
+       ro1.impulses.push_back(*ro1Impulse);
+       ro2.impulses.push_back(*ro2Impulse);
+       delete ro1Impulse;
+       delete ro2Impulse;
 
-   //updating velocities according to impulses
-   ro1.updateImpulseVelocities();
-   ro2.updateImpulseVelocities();
+       //updating velocities according to impulses
+       if(ro1.isFixed)
+        cout << "ro1 is fixed" << endl;
+       cout << "ro1 impulse update" << endl;
+       ro1.updateImpulseVelocities();
+       if (ro2.isFixed)
+        cout << "ro2 is fixed" << endl;
+       cout << "ro2 impulse update" << endl;
+       ro2.updateImpulseVelocities();
     }
 
 
@@ -375,8 +452,8 @@ public:
             orientation.normalize();
             igl::readOFF(std::string(DATA_PATH)+std::string("/")+OFFFileName,objV,objT);
             addRigidObject(objV,objT,density, isFixed, COM, orientation);
-			cout << "COM: " << COM <<endl;
-            cout << "orientation: " << orientation <<endl;
+			//cout << "COM: " << COM <<endl;
+            //cout << "orientation: " << orientation <<endl;
         }
         return true;
     }
